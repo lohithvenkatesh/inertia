@@ -1,29 +1,190 @@
-# Docker
-# Build a Docker image
-# https://docs.microsoft.com/azure/devops/pipelines/languages/docker
+# File: simple-param.yml
+parameters:
+- name: yesNo # name of the parameter; required
+  type: boolean # data type of the parameter; required
+  default: false
 
+steps:
+- script: echo ${{ parameters.yesNo }}
+
+# File: azure-pipelines.yml
 trigger:
 - main
 
-resources:
-- repo: self
+extends:
+  template: simple-param.yml
+  parameters:
+      yesNo: false # set to a non-boolean value to have the build fail
+#azure-pipeline.yml
+parameters:
+- name: experimentalTemplate
+  displayName: 'Use experimental build process?'
+  type: boolean
+  default: false
 
-variables:
-  tag: '$(Build.BuildId)'
+steps:
+- ${{ if eq(parameters.experimentalTemplate, true) }}:
+  - template: experimental.yml
+- ${{ if not(eq(parameters.experimentalTemplate, true)) }}:
+  - template: stable.yml
+parameters:
+- name: myString
+  type: string
+  default: a string
+- name: myMultiString
+  type: string
+  default: default
+  values:
+  - default
+  - ubuntu
+- name: myNumber
+  type: number
+  default: 2
+  values:
+  - 1
+  - 2
+  - 4
+  - 8
+  - 16
+- name: myBoolean
+  type: boolean
+  default: true
+- name: myObject
+  type: object
+  default:
+    foo: FOO
+    bar: BAR
+    things:
+    - one
+    - two
+    - three
+    nested:
+      one: apple
+      two: pear
+      count: 3
+- name: myStep
+  type: step
+  default:
+    script: echo my step
+- name: mySteplist
+  type: stepList
+  default:
+    - script: echo step one
+    - script: echo step two
 
+trigger: none
+
+jobs: 
+- job: stepList
+  steps: ${{ parameters.mySteplist }}
+- job: myStep
+  steps:
+    - ${{ parameters.myStep }}
+    parameters:
+- name: listOfStrings
+  type: object
+  default:
+  - one
+  - two
+
+steps:
+- ${{ each value in parameters.listOfStrings }}:
+  - script: echo ${{ value }}
+# File: start.yml
+parameters:
+- name: buildSteps # the name of the parameter is buildSteps
+  type: stepList # data type is StepList
+  default: [] # default value of buildSteps
 stages:
-- stage: Build
-  displayName: Build image
+- stage: secure_buildstage
+  pool:
+    vmImage: windows-latest
   jobs:
-  - job: Build
-    displayName: Build
-    pool:
-      vmImage: ubuntu-latest
+  - job: secure_buildjob
     steps:
-    - task: Docker@2
-      displayName: Build an image
-      inputs:
-        command: build
-        dockerfile: '**/Dockerfile'
-        tags: |
-          $(tag)
+    - script: echo This happens before code 
+      displayName: 'Base: Pre-build'
+    - script: echo Building
+      displayName: 'Base: Build'
+
+    - ${{ each step in parameters.buildSteps }}:
+      - ${{ each pair in step }}:
+          ${{ if ne(pair.value, 'CmdLine@2') }}:
+            ${{ pair.key }}: ${{ pair.value }}       
+          ${{ if eq(pair.value, 'CmdLine@2') }}: 
+            # Step is rejected by raising a YAML syntax error: Unexpected value 'CmdLine@2'
+            '${{ pair.value }}': error         
+
+    - script: echo This happens after code
+      displayName: 'Base: Signing'
+      # File: azure-pipelines.yml
+trigger:
+- main
+
+extends:
+  template: start.yml
+  parameters:
+    buildSteps:  
+      - bash: echo Test #Passes
+        displayName: succeed
+      - bash: echo "Test"
+        displayName: succeed
+      # Step is rejected by raising a YAML syntax error: Unexpected value 'CmdLine@2'
+      - task: CmdLine@2
+        inputs:
+          script: echo "Script Test"
+      # Step is rejected by raising a YAML syntax error: Unexpected value 'CmdLine@2'
+      - script: echo "Script Test"
+      # File: azure-pipelines.yml
+trigger:
+- none
+
+extends:
+  template: resource-template.yml
+  # File: resource-template.yml
+resources:
+  pipelines:
+  - pipeline: my-pipeline 
+    source: sourcePipeline
+
+steps:
+- script: echo "Testing resource template"
+#testing-template.yml
+
+parameters: 
+- name: testSet
+  type: jobList
+
+jobs:
+- ${{ each testJob in parameters.testSet }}:
+  - ${{ if eq(testJob.templateContext.expectedHTTPResponseCode, 200) }}:
+    - job:
+      steps: 
+      - powershell: 'Invoke-RestMethod -Uri https://blogs.msdn.microsoft.com/powershell/feed/ | Format-Table -Property Title, pubDate'
+      - ${{ testJob.steps }}    
+  - ${{ if eq(testJob.templateContext.expectedHTTPResponseCode, 500) }}:
+    - job:
+      steps:
+      - powershell: 'Get-ChildItem -Path Env:\'
+      - ${{ testJob.steps }}
+      #azure-pipeline.yml
+
+trigger: none
+
+pool:
+  vmImage: ubuntu-latest
+
+extends:
+  template: testing-template.yml
+  parameters:
+    testSet:
+    - job: positive_test
+      templateContext:
+        expectedHTTPResponseCode: 200
+      steps:
+      - script: echo "Run positive test" 
+    - job: negative_test
+      templateContext:
+        expectedHTTPResponseCode: 500
+      steps:
+      - script: echo "Run negative test"
